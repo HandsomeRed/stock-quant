@@ -79,7 +79,12 @@ df = ak.stock_info_a_code_name()
 
 ## 🌐 访问地址
 
-**外网访问：** http://49.232.215.84:8501  
+**本地运行：**
+```bash
+source venv/bin/activate
+streamlit run app.py --server.port 8501
+```
+→ http://localhost:8501  
 **本地访问：** http://localhost:8501
 
 ---
