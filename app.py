@@ -12,6 +12,10 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
+# 导入模拟交易模块
+sys.path.insert(0, str(Path(__file__).parent))
+from src.trading.simulated_account import SimulatedAccount, OrderType
+
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
@@ -297,31 +301,104 @@ elif page == "💼 模拟交易":
     st.markdown("使用虚拟资金进行实盘模拟")
     st.markdown("---")
     
+    # 初始化账户（使用 session_state 保持状态）
+    if 'account' not in st.session_state:
+        st.session_state.account = SimulatedAccount(initial_capital=100000.0)
+    
+    account = st.session_state.account
+    
     # 账户信息
-    col1, col2, col3 = st.columns(3)
-    col1.metric("总资产", "100,000.00 元")
-    col2.metric("可用资金", "100,000.00 元")
-    col3.metric("持仓市值", "0.00 元")
+    st.markdown("### 📊 账户概览")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("💰 可用资金", f"{account.cash:,.2f}元")
+    col2.metric("📈 持仓市值", f"{account.total_market_value:,.2f}元")
+    col3.metric("💵 总资产", f"{account.total_assets:,.2f}元")
+    col4.metric("📊 浮动盈亏", f"{account.total_profit:+,.2f}元 ({account.total_profit_rate:+.2f}%)")
     
-    st.info("💡 模拟交易功能开发中...")
+    st.markdown("---")
     
-    # 买入卖出
+    # 交易操作
     col1, col2 = st.columns(2)
+    
     with col1:
-        st.markdown("### 买入")
-        buy_stock = st.text_input("股票代码", key="buy")
-        buy_price = st.number_input("买入价格", key="buy_price")
-        buy_volume = st.number_input("买入数量 (股)", step=100, key="buy_vol")
-        if st.button("买入", key="buy_btn"):
-            st.success("✅ 买入委托已提交（模拟）")
+        st.markdown("### 🟢 买入")
+        buy_stock = st.text_input("股票代码", "000001", key="buy")
+        
+        # 获取股票名称
+        stock_name = ""
+        try:
+            stock_list = ak.stock_info_a_code_name()
+            matched = stock_list[stock_list['code'] == buy_stock]
+            if not matched.empty:
+                stock_name = matched.iloc[0]['name']
+                st.caption(f"股票名称：{stock_name}")
+        except:
+            pass
+        
+        buy_price = st.number_input("买入价格", min_value=0.01, step=0.01, key="buy_price")
+        buy_volume = st.number_input("买入数量 (股)", min_value=100, step=100, value=1000, key="buy_vol")
+        
+        if st.button("🟢 买入", key="buy_btn", type="primary", use_container_width=True):
+            try:
+                order = account.buy(buy_stock, stock_name or buy_stock, buy_price, buy_volume)
+                st.success(f"✅ 买入成交：{order.fill_volume}股 @ {order.fill_price:.2f}元")
+                st.rerun()
+            except ValueError as e:
+                st.error(f"❌ {str(e)}")
     
     with col2:
-        st.markdown("### 卖出")
-        sell_stock = st.text_input("股票代码", key="sell")
-        sell_price = st.number_input("卖出价格", key="sell_price")
-        sell_volume = st.number_input("卖出数量 (股)", step=100, key="sell_vol")
-        if st.button("卖出", key="sell_btn"):
-            st.success("✅ 卖出委托已提交（模拟）")
+        st.markdown("### 🔴 卖出")
+        # 显示持仓供选择
+        positions = account.get_positions()
+        if positions:
+            position_options = {f"{pos.stock_code} {pos.stock_name} ({pos.volume}股)": pos.stock_code for pos in positions}
+            selected = st.selectbox("选择持仓", list(position_options.keys()))
+            sell_stock_code = position_options[selected]
+            sell_position = account.positions[sell_stock_code]
+            
+            sell_price = st.number_input("卖出价格", min_value=0.01, step=0.01, value=sell_position.current_price, key="sell_price")
+            sell_volume = st.number_input("卖出数量 (股)", min_value=100, step=100, value=min(1000, sell_position.volume), key="sell_vol")
+            
+            if st.button("🔴 卖出", key="sell_btn", type="primary", use_container_width=True):
+                try:
+                    order = account.sell(sell_stock_code, sell_position.stock_name, sell_price, sell_volume)
+                    st.success(f"✅ 卖出成交：{order.fill_volume}股 @ {order.fill_price:.2f}元")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(f"❌ {str(e)}")
+        else:
+            st.info("暂无持仓，请先买入股票")
+    
+    st.markdown("---")
+    
+    # 持仓详情
+    st.markdown("### 📊 持仓详情")
+    positions = account.get_positions()
+    if positions:
+        pos_data = [pos.to_dict() for pos in positions]
+        pos_df = pd.DataFrame(pos_data)
+        
+        # 格式化显示
+        display_df = pos_df[['stock_code', 'stock_name', 'volume', 'avg_price', 'current_price', 'market_value', 'profit', 'profit_rate']].copy()
+        display_df.columns = ['代码', '名称', '数量', '成本价', '当前价', '市值', '浮动盈亏', '盈亏比例']
+        st.dataframe(display_df, hide_index=True, use_container_width=True)
+    else:
+        st.info("暂无持仓")
+    
+    st.markdown("---")
+    
+    # 成交记录
+    st.markdown("### 📝 成交记录")
+    trades = account.get_trades()
+    if trades:
+        trade_data = [trade.to_dict() for trade in trades[-20:]]  # 最近 20 条
+        trade_df = pd.DataFrame(trade_data)
+        
+        display_trade_df = trade_df[['trade_time', 'order_type', 'stock_code', 'stock_name', 'price', 'volume', 'amount', 'commission']].copy()
+        display_trade_df.columns = ['成交时间', '类型', '代码', '名称', '价格', '数量', '金额', '手续费']
+        st.dataframe(display_trade_df, hide_index=True, use_container_width=True)
+    else:
+        st.info("暂无成交记录")
 
 # ==================== 学习记录页面 ====================
 elif page == "📚 学习记录":
@@ -331,8 +408,8 @@ elif page == "📚 学习记录":
     
     # 统计概览
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📊 完成阶段", "3", "Stage 1/1b/2")
-    col2.metric("✅ 测试通过", "26/27", "96% 通过率")
+    col1.metric("📊 完成阶段", "4", "Stage 1/1b/2/3")
+    col2.metric("✅ 测试通过", "54/55", "98% 通过率")
     col3.metric("📚 知识沉淀", "5 篇", "量化知识库")
     col4.metric("🏆 最佳策略", "+36.58%", "双均线 12/26")
     
@@ -342,6 +419,29 @@ elif page == "📚 学习记录":
     st.markdown("### 📅 开发记录")
     
     st.markdown("""
+    <div style="background: #f0f2f6; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #28a745;">
+        <h3>🎯 Stage 3 - 模拟交易系统</h3>
+        <p><strong>完成时间：</strong>2026-03-15 20:45</p>
+        <p><strong>实现内容：</strong></p>
+        <ul>
+            <li>✅ 模拟账户管理（资金、持仓）</li>
+            <li>✅ 买入/卖出委托下单</li>
+            <li>✅ 持仓盈亏实时计算</li>
+            <li>✅ 成交记录保存</li>
+            <li>✅ 手续费计算（万三，最低 5 元）</li>
+            <li>✅ 印花税（卖出千分之一）</li>
+            <li>✅ 28 个单元测试，100% 通过率</li>
+        </ul>
+        <p><strong>核心功能：</strong></p>
+        <ul>
+            <li>初始资金：10 万元</li>
+            <li>支持多股票持仓</li>
+            <li>加仓自动计算平均成本</li>
+            <li>部分卖出、全部卖出</li>
+            <li>实时浮动盈亏展示</li>
+        </ul>
+    </div>
+    
     <div style="background: #f0f2f6; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #1f77b4;">
         <h3>🎯 Stage 2 - 策略回测引擎</h3>
         <p><strong>完成时间：</strong>2026-03-12 20:00</p>
